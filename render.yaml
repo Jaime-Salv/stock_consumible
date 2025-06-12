@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: consumibles-control
+    name: stock_consumible
     env: docker
     plan: free
     autoDeploy: true
