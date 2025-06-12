@@ -1,0 +1,268 @@
+from fastapi import FastAPI, Form, Request, HTTPException
+from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+import sqlite3
+from datetime import datetime
+from pathlib import Path
+import pdfkit
+from pdfkit.configuration import Configuration
+import pandas as pd
+
+PDFKIT_CONFIG = Configuration(wkhtmltopdf="/usr/bin/wkhtmltopdf")
+app = FastAPI()
+
+BASE_DIR = Path(__file__).resolve().parent
+app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
+templates = Jinja2Templates(directory=BASE_DIR / "templates")
+
+DB_PATH = str(BASE_DIR / "data" / "carton.db")
+
+@app.get("/")
+def menu(request: Request):
+    return templates.TemplateResponse("menu.html", {"request": request})
+
+@app.get("/consumibles", response_class=HTMLResponse)
+def gestionar_consumibles(request: Request):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT codigo_hoja, nombre_mostrado, categoria FROM consumibles ORDER BY categoria, nombre_mostrado")
+    consumibles = cursor.fetchall()
+    conn.close()
+    return templates.TemplateResponse("consumibles.html", {"request": request, "consumibles": consumibles})
+
+@app.post("/consumibles/agregar")
+def agregar_consumible(
+    nombre_mostrado: str = Form(...),
+    codigo_hoja: str = Form(...),
+    categoria: str = Form(...)
+):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT OR REPLACE INTO consumibles (codigo_hoja, nombre_mostrado, categoria)
+        VALUES (?, ?, ?)
+    """, (codigo_hoja, nombre_mostrado, categoria))
+    conn.commit()
+    conn.close()
+    return RedirectResponse(url="/consumibles", status_code=303)
+
+@app.post("/consumibles/eliminar")
+def eliminar_consumible(codigo_hoja: str = Form(...)):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM consumibles WHERE codigo_hoja = ?", (codigo_hoja,))
+    conn.commit()
+    conn.close()
+    return RedirectResponse(url="/consumibles", status_code=303)
+
+@app.get("/entrada", response_class=HTMLResponse)
+def entrada_form(request: Request):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT categoria, nombre_mostrado, codigo_hoja FROM consumibles")
+    datos = cursor.fetchall()
+    conn.close()
+
+    consumibles = {}
+    for categoria, nombre, codigo in datos:
+        if categoria not in consumibles:
+            consumibles[categoria] = []
+        consumibles[categoria].append((nombre, codigo))
+
+    return templates.TemplateResponse("entrada.html", {
+        "request": request,
+        "consumibles": consumibles,
+        "volver_menu": True,
+        "mensaje": None
+    })
+
+@app.post("/entrada", response_class=HTMLResponse)
+def registrar_entrada(
+    request: Request,
+    fecha: str = Form(...),
+    codigo_lote: str = Form(...),
+    cantidad: float = Form(...),
+    precio_unitario: float = Form(...),
+    codigo_consumible: str = Form(...)
+):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO movimientos (fecha, tipo, id_lote, documento, nombre_consumible, entrada, salida, existencias, precio_unitario)
+        VALUES (?, 'entrada', ?, ?, ?, ?, NULL, ?, ?)
+    """, (
+        fecha,
+        codigo_lote,
+        codigo_lote,
+        codigo_consumible,
+        cantidad,
+        cantidad,
+        precio_unitario
+    ))
+    conn.commit()
+    conn.close()
+
+    return entrada_form(request=request)
+
+@app.get("/salida", response_class=HTMLResponse)
+def salida_form(request: Request, filtro_formato: str = "", mensaje: str = ""):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT codigo_hoja, nombre_mostrado FROM consumibles ORDER BY nombre_mostrado")
+    formatos_disponibles = cursor.fetchall()
+
+    lotes = []
+    if filtro_formato:
+        cursor.execute("""
+            SELECT id_lote, SUM(COALESCE(entrada, 0)) - SUM(COALESCE(salida, 0)) AS stock
+            FROM movimientos
+            WHERE nombre_consumible = ?
+            GROUP BY id_lote
+            HAVING stock > 0
+        """, (filtro_formato,))
+        lotes = cursor.fetchall()
+
+    conn.close()
+    return templates.TemplateResponse("salida.html", {
+        "request": request,
+        "formatos": formatos_disponibles,
+        "filtro_formato": filtro_formato,
+        "lotes": lotes,
+        "mensaje": mensaje,
+        "volver_menu": True
+    })
+
+@app.post("/salida", response_class=HTMLResponse)
+def registrar_salida(
+    request: Request,
+    fecha: str = Form(...),
+    documento: str = Form(...),
+    cantidad: float = Form(...),
+    nombre_consumible: str = Form(...),
+    id_lote: str = Form(...)
+):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT SUM(COALESCE(entrada, 0)) - SUM(COALESCE(salida, 0)) FROM movimientos WHERE nombre_consumible = ? AND id_lote = ?", (nombre_consumible, id_lote))
+    stock_actual = cursor.fetchone()[0] or 0
+
+    if cantidad > stock_actual:
+        conn.close()
+        raise HTTPException(status_code=400, detail=f"No puedes retirar {cantidad}. Stock disponible: {stock_actual}")
+
+    cursor.execute("""
+        INSERT INTO movimientos (fecha, tipo, id_lote, documento, nombre_consumible, entrada, salida, existencias, precio_unitario)
+        VALUES (?, 'salida', ?, ?, ?, NULL, ?, NULL, NULL)
+    """, (
+        fecha,
+        id_lote,
+        documento,
+        nombre_consumible,
+        cantidad
+    ))
+    conn.commit()
+    conn.close()
+
+    return salida_form(request=request, filtro_formato=nombre_consumible)
+
+@app.get("/stock", response_class=HTMLResponse)
+def ver_stock(request: Request, filtro_formato: str = "", filtro_lote: str = ""):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT nombre_consumible, id_lote,
+               SUM(COALESCE(entrada, 0)) - SUM(COALESCE(salida, 0)) AS stock,
+               MAX(CASE WHEN tipo = 'entrada' THEN precio_unitario ELSE NULL END) as precio_unitario
+        FROM movimientos
+        GROUP BY nombre_consumible, id_lote
+        HAVING stock > 0
+    """)
+    resultados = cursor.fetchall()
+    cursor.execute("SELECT codigo_hoja, nombre_mostrado FROM consumibles ORDER BY nombre_mostrado")
+    formatos_disponibles = cursor.fetchall()
+
+    lotes_disponibles = []
+    if filtro_formato:
+        cursor.execute("SELECT DISTINCT id_lote FROM movimientos WHERE nombre_consumible = ? AND tipo = 'entrada'", (filtro_formato,))
+        lotes_disponibles = [row[0] for row in cursor.fetchall()]
+
+    conn.close()
+
+    filtrados = [r for r in resultados if (filtro_formato == "" or filtro_formato == r[0]) and (filtro_lote == "" or filtro_lote == r[1])]
+
+    return templates.TemplateResponse("stock.html", {
+        "request": request,
+        "stock": filtrados,
+        "filtro_formato": filtro_formato,
+        "filtro_lote": filtro_lote,
+        "formatos": formatos_disponibles,
+        "lotes": lotes_disponibles,
+        "volver_menu": True
+    })
+
+@app.get("/stock/informe-pdf")
+def generar_informe_pdf():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT c.nombre_mostrado, m.nombre_consumible, m.id_lote,
+               SUM(COALESCE(m.entrada, 0)) - SUM(COALESCE(m.salida, 0)) as stock,
+               MAX(CASE WHEN tipo = 'entrada' THEN precio_unitario ELSE NULL END) as precio
+        FROM movimientos m
+        JOIN consumibles c ON m.nombre_consumible = c.codigo_hoja
+        GROUP BY m.nombre_consumible, m.id_lote
+        HAVING stock > 0
+        ORDER BY c.nombre_mostrado, m.id_lote
+    """)
+    datos = cursor.fetchall()
+    conn.close()
+
+    html = f"""
+    <!DOCTYPE html>
+    <html lang='es'>
+    <head>
+        <meta charset='UTF-8'>
+        <style>
+            body {{ font-family: 'DejaVu Sans', Arial, sans-serif; }}
+            h1 {{ text-align: center; }}
+            table {{ width: 100%; border-collapse: collapse; margin-bottom: 30px; }}
+            th, td {{ border: 1px solid #ccc; padding: 8px; text-align: center; }}
+            th {{ background-color: #f2f2f2; }}
+        </style>
+    </head>
+    <body>
+        <h1>Informe de stock - {datetime.now().strftime('%d/%m/%Y %H:%M')}</h1>
+    """
+
+    resumen = {}
+    for nombre_mostrado, codigo, lote, stock, precio in datos:
+        if nombre_mostrado not in resumen:
+            resumen[nombre_mostrado] = []
+        resumen[nombre_mostrado].append((lote, stock, precio))
+
+    for nombre, items in resumen.items():
+        html += f"<h2>{nombre}</h2><table><tr><th>Lote</th><th>Stock</th><th>Precio Unitario (€)</th></tr>"
+        total = 0
+        for lote, stock, precio in items:
+            precio_str = f"{precio:.4f}" if precio else "N/A"
+            html += f"<tr><td>{lote}</td><td>{stock:.2f}</td><td>{precio_str}</td></tr>"
+            total += stock
+        html += f"<tr><th colspan='2'>Total</th><th>{total:.2f}</th></tr></table>"
+
+    html += "</body></html>"
+
+    output_path = BASE_DIR / "static" / "informe_stock.pdf"
+    pdfkit.from_string(html, str(output_path), configuration=PDFKIT_CONFIG)
+    return FileResponse(path=output_path, filename="informe_stock.pdf", media_type="application/pdf")
+
+@app.get("/movimientos/exportar")
+def exportar_movimientos_excel():
+    conn = sqlite3.connect(DB_PATH)
+    df = pd.read_sql_query("SELECT * FROM movimientos", conn)
+    conn.close()
+
+    output_path = BASE_DIR / "static" / "movimientos.xlsx"
+    df.to_excel(output_path, index=False)
+
+    return FileResponse(path=output_path, filename="movimientos.xlsx", media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
