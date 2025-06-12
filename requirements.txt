@@ -5,3 +5,4 @@ pdfkit
 pandas
 psycopg2-binary
 openpyxl
+python-multipart
