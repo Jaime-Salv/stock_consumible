@@ -2,12 +2,13 @@ from fastapi import FastAPI, Form, Request, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-import sqlite3
 from datetime import datetime
 from pathlib import Path
+import os
 import pdfkit
 from pdfkit.configuration import Configuration
 import pandas as pd
+from utils.db import get_connection
 
 PDFKIT_CONFIG = Configuration(wkhtmltopdf="/usr/bin/wkhtmltopdf")
 app = FastAPI()
@@ -16,7 +17,38 @@ BASE_DIR = Path(__file__).resolve().parent
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
-DB_PATH = str(BASE_DIR / "data" / "carton.db")
+# Crear tablas automáticamente
+def crear_tablas():
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS consumibles (
+        codigo_hoja TEXT PRIMARY KEY,
+        nombre_mostrado TEXT NOT NULL,
+        categoria TEXT NOT NULL CHECK (categoria IN ('carton', 'plastico', 'aditivo', 'sal', 'agua'))
+    )
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS movimientos (
+        id SERIAL PRIMARY KEY,
+        fecha TEXT NOT NULL,
+        tipo TEXT NOT NULL CHECK (tipo IN ('entrada', 'salida')),
+        id_lote TEXT NOT NULL,
+        documento TEXT NOT NULL,
+        nombre_consumible TEXT NOT NULL REFERENCES consumibles(codigo_hoja),
+        entrada REAL,
+        salida REAL,
+        existencias REAL,
+        precio_unitario REAL
+    )
+    """)
+
+    conn.commit()
+    conn.close()
+
+crear_tablas()
 
 @app.get("/")
 def menu(request: Request):
@@ -24,7 +56,7 @@ def menu(request: Request):
 
 @app.get("/consumibles", response_class=HTMLResponse)
 def gestionar_consumibles(request: Request):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT codigo_hoja, nombre_mostrado, categoria FROM consumibles ORDER BY categoria, nombre_mostrado")
     consumibles = cursor.fetchall()
@@ -32,16 +64,12 @@ def gestionar_consumibles(request: Request):
     return templates.TemplateResponse("consumibles.html", {"request": request, "consumibles": consumibles})
 
 @app.post("/consumibles/agregar")
-def agregar_consumible(
-    nombre_mostrado: str = Form(...),
-    codigo_hoja: str = Form(...),
-    categoria: str = Form(...)
-):
-    conn = sqlite3.connect(DB_PATH)
+def agregar_consumible(nombre_mostrado: str = Form(...), codigo_hoja: str = Form(...), categoria: str = Form(...)):
+    conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
         INSERT OR REPLACE INTO consumibles (codigo_hoja, nombre_mostrado, categoria)
-        VALUES (?, ?, ?)
+        VALUES (%s, %s, %s)
     """, (codigo_hoja, nombre_mostrado, categoria))
     conn.commit()
     conn.close()
@@ -49,16 +77,16 @@ def agregar_consumible(
 
 @app.post("/consumibles/eliminar")
 def eliminar_consumible(codigo_hoja: str = Form(...)):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM consumibles WHERE codigo_hoja = ?", (codigo_hoja,))
+    cursor.execute("DELETE FROM consumibles WHERE codigo_hoja = %s", (codigo_hoja,))
     conn.commit()
     conn.close()
     return RedirectResponse(url="/consumibles", status_code=303)
 
 @app.get("/entrada", response_class=HTMLResponse)
 def entrada_form(request: Request):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT categoria, nombre_mostrado, codigo_hoja FROM consumibles")
     datos = cursor.fetchall()
@@ -86,28 +114,19 @@ def registrar_entrada(
     precio_unitario: float = Form(...),
     codigo_consumible: str = Form(...)
 ):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
         INSERT INTO movimientos (fecha, tipo, id_lote, documento, nombre_consumible, entrada, salida, existencias, precio_unitario)
-        VALUES (?, 'entrada', ?, ?, ?, ?, NULL, ?, ?)
-    """, (
-        fecha,
-        codigo_lote,
-        codigo_lote,
-        codigo_consumible,
-        cantidad,
-        cantidad,
-        precio_unitario
-    ))
+        VALUES (%s, 'entrada', %s, %s, %s, %s, NULL, %s, %s)
+    """, (fecha, codigo_lote, codigo_lote, codigo_consumible, cantidad, cantidad, precio_unitario))
     conn.commit()
     conn.close()
-
     return entrada_form(request=request)
 
 @app.get("/salida", response_class=HTMLResponse)
 def salida_form(request: Request, filtro_formato: str = "", mensaje: str = ""):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT codigo_hoja, nombre_mostrado FROM consumibles ORDER BY nombre_mostrado")
     formatos_disponibles = cursor.fetchall()
@@ -117,7 +136,7 @@ def salida_form(request: Request, filtro_formato: str = "", mensaje: str = ""):
         cursor.execute("""
             SELECT id_lote, SUM(COALESCE(entrada, 0)) - SUM(COALESCE(salida, 0)) AS stock
             FROM movimientos
-            WHERE nombre_consumible = ?
+            WHERE nombre_consumible = %s
             GROUP BY id_lote
             HAVING stock > 0
         """, (filtro_formato,))
@@ -142,9 +161,12 @@ def registrar_salida(
     nombre_consumible: str = Form(...),
     id_lote: str = Form(...)
 ):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT SUM(COALESCE(entrada, 0)) - SUM(COALESCE(salida, 0)) FROM movimientos WHERE nombre_consumible = ? AND id_lote = ?", (nombre_consumible, id_lote))
+    cursor.execute("""
+        SELECT SUM(COALESCE(entrada, 0)) - SUM(COALESCE(salida, 0))
+        FROM movimientos WHERE nombre_consumible = %s AND id_lote = %s
+    """, (nombre_consumible, id_lote))
     stock_actual = cursor.fetchone()[0] or 0
 
     if cantidad > stock_actual:
@@ -153,22 +175,15 @@ def registrar_salida(
 
     cursor.execute("""
         INSERT INTO movimientos (fecha, tipo, id_lote, documento, nombre_consumible, entrada, salida, existencias, precio_unitario)
-        VALUES (?, 'salida', ?, ?, ?, NULL, ?, NULL, NULL)
-    """, (
-        fecha,
-        id_lote,
-        documento,
-        nombre_consumible,
-        cantidad
-    ))
+        VALUES (%s, 'salida', %s, %s, %s, NULL, %s, NULL, NULL)
+    """, (fecha, id_lote, documento, nombre_consumible, cantidad))
     conn.commit()
     conn.close()
-
     return salida_form(request=request, filtro_formato=nombre_consumible)
 
 @app.get("/stock", response_class=HTMLResponse)
 def ver_stock(request: Request, filtro_formato: str = "", filtro_lote: str = ""):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
         SELECT nombre_consumible, id_lote,
@@ -176,15 +191,16 @@ def ver_stock(request: Request, filtro_formato: str = "", filtro_lote: str = "")
                MAX(CASE WHEN tipo = 'entrada' THEN precio_unitario ELSE NULL END) as precio_unitario
         FROM movimientos
         GROUP BY nombre_consumible, id_lote
-        HAVING stock > 0
+        HAVING SUM(COALESCE(entrada, 0)) - SUM(COALESCE(salida, 0)) > 0
     """)
     resultados = cursor.fetchall()
+
     cursor.execute("SELECT codigo_hoja, nombre_mostrado FROM consumibles ORDER BY nombre_mostrado")
     formatos_disponibles = cursor.fetchall()
 
     lotes_disponibles = []
     if filtro_formato:
-        cursor.execute("SELECT DISTINCT id_lote FROM movimientos WHERE nombre_consumible = ? AND tipo = 'entrada'", (filtro_formato,))
+        cursor.execute("SELECT DISTINCT id_lote FROM movimientos WHERE nombre_consumible = %s AND tipo = 'entrada'", (filtro_formato,))
         lotes_disponibles = [row[0] for row in cursor.fetchall()]
 
     conn.close()
@@ -203,7 +219,7 @@ def ver_stock(request: Request, filtro_formato: str = "", filtro_lote: str = "")
 
 @app.get("/stock/informe-pdf")
 def generar_informe_pdf():
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
         SELECT c.nombre_mostrado, m.nombre_consumible, m.id_lote,
@@ -211,8 +227,8 @@ def generar_informe_pdf():
                MAX(CASE WHEN tipo = 'entrada' THEN precio_unitario ELSE NULL END) as precio
         FROM movimientos m
         JOIN consumibles c ON m.nombre_consumible = c.codigo_hoja
-        GROUP BY m.nombre_consumible, m.id_lote
-        HAVING stock > 0
+        GROUP BY m.nombre_consumible, m.id_lote, c.nombre_mostrado
+        HAVING SUM(COALESCE(m.entrada, 0)) - SUM(COALESCE(m.salida, 0)) > 0
         ORDER BY c.nombre_mostrado, m.id_lote
     """)
     datos = cursor.fetchall()
@@ -258,7 +274,7 @@ def generar_informe_pdf():
 
 @app.get("/movimientos/exportar")
 def exportar_movimientos_excel():
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
     df = pd.read_sql_query("SELECT * FROM movimientos", conn)
     conn.close()
 
