@@ -1,7 +1,7 @@
 fastapi
-uvicorn
+uvicorn[standard]
 jinja2
-pandas
-openpyxl
 pdfkit
-gunicorn
+pandas
+psycopg2-binary
+openpyxl
