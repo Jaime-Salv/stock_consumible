@@ -8,7 +8,8 @@ import os
 import pdfkit
 from pdfkit.configuration import Configuration
 import pandas as pd
-from utils.db import get_connection
+from .utils.db import get_connection
+
 
 PDFKIT_CONFIG = Configuration(wkhtmltopdf="/usr/bin/wkhtmltopdf")
 app = FastAPI()
