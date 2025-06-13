@@ -10,7 +10,6 @@ from pdfkit.configuration import Configuration
 import pandas as pd
 from .utils.db import get_connection
 
-
 PDFKIT_CONFIG = Configuration(wkhtmltopdf="/usr/bin/wkhtmltopdf")
 app = FastAPI()
 
@@ -18,7 +17,7 @@ BASE_DIR = Path(__file__).resolve().parent
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
-# Crear tablas automáticamente
+@app.on_event("startup")
 def crear_tablas():
     conn = get_connection()
     cursor = conn.cursor()
@@ -49,8 +48,6 @@ def crear_tablas():
     conn.commit()
     conn.close()
 
-crear_tablas()
-
 @app.get("/")
 def menu(request: Request):
     return templates.TemplateResponse("menu.html", {"request": request})
@@ -69,8 +66,11 @@ def agregar_consumible(nombre_mostrado: str = Form(...), codigo_hoja: str = Form
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT OR REPLACE INTO consumibles (codigo_hoja, nombre_mostrado, categoria)
+        INSERT INTO consumibles (codigo_hoja, nombre_mostrado, categoria)
         VALUES (%s, %s, %s)
+        ON CONFLICT (codigo_hoja) DO UPDATE
+        SET nombre_mostrado = EXCLUDED.nombre_mostrado,
+            categoria = EXCLUDED.categoria
     """, (codigo_hoja, nombre_mostrado, categoria))
     conn.commit()
     conn.close()
@@ -95,9 +95,7 @@ def entrada_form(request: Request):
 
     consumibles = {}
     for categoria, nombre, codigo in datos:
-        if categoria not in consumibles:
-            consumibles[categoria] = []
-        consumibles[categoria].append((nombre, codigo))
+        consumibles.setdefault(categoria, []).append((nombre, codigo))
 
     return templates.TemplateResponse("entrada.html", {
         "request": request,
@@ -254,9 +252,7 @@ def generar_informe_pdf():
 
     resumen = {}
     for nombre_mostrado, codigo, lote, stock, precio in datos:
-        if nombre_mostrado not in resumen:
-            resumen[nombre_mostrado] = []
-        resumen[nombre_mostrado].append((lote, stock, precio))
+        resumen.setdefault(nombre_mostrado, []).append((lote, stock, precio))
 
     for nombre, items in resumen.items():
         html += f"<h2>{nombre}</h2><table><tr><th>Lote</th><th>Stock</th><th>Precio Unitario (€)</th></tr>"
@@ -283,3 +279,4 @@ def exportar_movimientos_excel():
     df.to_excel(output_path, index=False)
 
     return FileResponse(path=output_path, filename="movimientos.xlsx", media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
