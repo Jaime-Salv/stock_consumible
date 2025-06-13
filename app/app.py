@@ -125,70 +125,48 @@ def registrar_entrada(
 
 @app.get("/salida", response_class=HTMLResponse)
 def salida_form(request: Request, filtro_formato: str = "", mensaje: str = ""):
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT codigo_hoja, nombre_mostrado FROM consumibles ORDER BY nombre_mostrado")
-    formatos_disponibles = cursor.fetchall()
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
 
-    lotes = []
-    if filtro_formato:
-        cursor.execute("""
-            SELECT id_lote, SUM(COALESCE(entrada, 0)) - SUM(COALESCE(salida, 0)) AS stock
-            FROM movimientos
-            WHERE nombre_consumible = %s
-            GROUP BY id_lote
-            HAVING stock > 0
-        """, (filtro_formato,))
-        lotes = cursor.fetchall()
+        # Obtener todos los formatos
+        cursor.execute("SELECT codigo_hoja, nombre_mostrado FROM consumibles ORDER BY nombre_mostrado")
+        formatos_disponibles = cursor.fetchall()
 
-    conn.close()
-    return templates.TemplateResponse("salida.html", {
-        "request": request,
-        "formatos": formatos_disponibles,
-        "filtro_formato": filtro_formato,
-        "lotes": lotes,
-        "mensaje": mensaje,
-        "volver_menu": True
-    })
+        formatos_codigos = [f[0] for f in formatos_disponibles]
 
-@app.get("/salida", response_class=HTMLResponse)
-def salida_form(request: Request, filtro_formato: str = "", mensaje: str = ""):
-    conn = get_connection()
-    cursor = conn.cursor()
+        if filtro_formato and filtro_formato not in formatos_codigos:
+            mensaje = "⚠️ El formato seleccionado no existe o aún no tiene movimientos."
+            filtro_formato = ""
+            lotes = []
+        else:
+            # Cargar los lotes del formato seleccionado
+            lotes = []
+            if filtro_formato:
+                cursor.execute("""
+                    SELECT id_lote, SUM(COALESCE(entrada, 0)) - SUM(COALESCE(salida, 0)) AS stock
+                    FROM movimientos
+                    WHERE nombre_consumible = %s
+                    GROUP BY id_lote
+                    HAVING stock > 0
+                """, (filtro_formato,))
+                lotes = cursor.fetchall()
 
-    # Cargar todos los formatos
-    cursor.execute("SELECT codigo_hoja, nombre_mostrado FROM consumibles ORDER BY nombre_mostrado")
-    formatos_disponibles = cursor.fetchall()
+        conn.close()
 
-    # Validar si el formato existe
-    formatos_codigos = [f[0] for f in formatos_disponibles]
-    if filtro_formato and filtro_formato not in formatos_codigos:
-        filtro_formato = ""
-        mensaje = "⚠️ El formato seleccionado no existe o no tiene stock disponible."
+        return templates.TemplateResponse("salida.html", {
+            "request": request,
+            "formatos": formatos_disponibles,
+            "filtro_formato": filtro_formato,
+            "lotes": lotes,
+            "mensaje": mensaje,
+            "volver_menu": True
+        })
 
-    # Cargar lotes si el formato es válido
-    lotes = []
-    if filtro_formato:
-        cursor.execute("""
-            SELECT id_lote, SUM(COALESCE(entrada, 0)) - SUM(COALESCE(salida, 0)) AS stock
-            FROM movimientos
-            WHERE nombre_consumible = %s
-            GROUP BY id_lote
-            HAVING stock > 0
-        """, (filtro_formato,))
-        lotes = cursor.fetchall()
-
-    conn.close()
-
-    return templates.TemplateResponse("salida.html", {
-        "request": request,
-        "formatos": formatos_disponibles,
-        "filtro_formato": filtro_formato,
-        "lotes": lotes,
-        "mensaje": mensaje,
-        "volver_menu": True
-    })
-
+    except Exception as e:
+        # Log en consola del servidor
+        print(f"❌ Error en salida_form(): {e}")
+        raise HTTPException(status_code=500, detail="Error interno en la carga de la página de salida.")
 
 @app.get("/stock", response_class=HTMLResponse)
 def ver_stock(request: Request, filtro_formato: str = "", filtro_lote: str = ""):
