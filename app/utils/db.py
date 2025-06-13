@@ -1,4 +1,3 @@
-
 import os
 import psycopg2
 from urllib.parse import urlparse
@@ -15,6 +14,7 @@ def get_connection():
         user=result.username,
         password=result.password,
         host=result.hostname,
-        port=result.port
+        port=result.port,
+        sslmode="require"  # Muy importante para Render
     )
     return conn
