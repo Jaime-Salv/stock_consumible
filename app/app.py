@@ -151,34 +151,44 @@ def salida_form(request: Request, filtro_formato: str = "", mensaje: str = ""):
         "volver_menu": True
     })
 
-@app.post("/salida", response_class=HTMLResponse)
-def registrar_salida(
-    request: Request,
-    fecha: str = Form(...),
-    documento: str = Form(...),
-    cantidad: float = Form(...),
-    nombre_consumible: str = Form(...),
-    id_lote: str = Form(...)
-):
+@app.get("/salida", response_class=HTMLResponse)
+def salida_form(request: Request, filtro_formato: str = "", mensaje: str = ""):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("""
-        SELECT SUM(COALESCE(entrada, 0)) - SUM(COALESCE(salida, 0))
-        FROM movimientos WHERE nombre_consumible = %s AND id_lote = %s
-    """, (nombre_consumible, id_lote))
-    stock_actual = cursor.fetchone()[0] or 0
 
-    if cantidad > stock_actual:
-        conn.close()
-        raise HTTPException(status_code=400, detail=f"No puedes retirar {cantidad}. Stock disponible: {stock_actual}")
+    # Cargar todos los formatos
+    cursor.execute("SELECT codigo_hoja, nombre_mostrado FROM consumibles ORDER BY nombre_mostrado")
+    formatos_disponibles = cursor.fetchall()
 
-    cursor.execute("""
-        INSERT INTO movimientos (fecha, tipo, id_lote, documento, nombre_consumible, entrada, salida, existencias, precio_unitario)
-        VALUES (%s, 'salida', %s, %s, %s, NULL, %s, NULL, NULL)
-    """, (fecha, id_lote, documento, nombre_consumible, cantidad))
-    conn.commit()
+    # Validar si el formato existe
+    formatos_codigos = [f[0] for f in formatos_disponibles]
+    if filtro_formato and filtro_formato not in formatos_codigos:
+        filtro_formato = ""
+        mensaje = "⚠️ El formato seleccionado no existe o no tiene stock disponible."
+
+    # Cargar lotes si el formato es válido
+    lotes = []
+    if filtro_formato:
+        cursor.execute("""
+            SELECT id_lote, SUM(COALESCE(entrada, 0)) - SUM(COALESCE(salida, 0)) AS stock
+            FROM movimientos
+            WHERE nombre_consumible = %s
+            GROUP BY id_lote
+            HAVING stock > 0
+        """, (filtro_formato,))
+        lotes = cursor.fetchall()
+
     conn.close()
-    return salida_form(request=request, filtro_formato=nombre_consumible)
+
+    return templates.TemplateResponse("salida.html", {
+        "request": request,
+        "formatos": formatos_disponibles,
+        "filtro_formato": filtro_formato,
+        "lotes": lotes,
+        "mensaje": mensaje,
+        "volver_menu": True
+    })
+
 
 @app.get("/stock", response_class=HTMLResponse)
 def ver_stock(request: Request, filtro_formato: str = "", filtro_lote: str = ""):
