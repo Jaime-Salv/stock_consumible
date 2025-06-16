@@ -167,7 +167,7 @@ def salida_form(request: Request, filtro_formato: str = "", mensaje: str = ""):
         raise HTTPException(status_code=500, detail="Error interno en la carga de la página de salida.")
 
 
-@app.post("/salida")
+@app.post("/salida", response_class=HTMLResponse)
 def registrar_salida(
     request: Request,
     fecha: str = Form(...),
@@ -175,26 +175,41 @@ def registrar_salida(
     id_lote: str = Form(...),
     documento: str = Form(...),
     cantidad: float = Form(...)
-    filtro_formato: str = Form("")
 ):
     try:
         conn = get_connection()
         cursor = conn.cursor()
 
+        # Verificar stock disponible
         cursor.execute("""
-            INSERT INTO movimientos (fecha, tipo, id_lote, documento, nombre_consumible, entrada, salida, existencias, precio_unitario)
-            VALUES (%s, 'salida', %s, %s, %s, NULL, %s, NULL, NULL)
-        """, (fecha, id_lote, documento, nombre_consumible, cantidad))
+            SELECT SUM(COALESCE(entrada, 0)) - SUM(COALESCE(salida, 0))
+            FROM movimientos
+            WHERE nombre_consumible = %s AND id_lote = %s
+        """, (nombre_consumible, id_lote))
+        stock_disponible = cursor.fetchone()[0] or 0
 
-        conn.commit()
+        if cantidad > stock_disponible:
+            mensaje = f"❌ No hay suficiente stock. Disponible: {stock_disponible:.2f} uds."
+        else:
+            cursor.execute("""
+                INSERT INTO movimientos (fecha, tipo, id_lote, documento, nombre_consumible, entrada, salida, existencias, precio_unitario)
+                VALUES (%s, 'salida', %s, %s, %s, NULL, %s, NULL, NULL)
+            """, (fecha, id_lote, documento, nombre_consumible, cantidad))
+            conn.commit()
+            mensaje = "✅ Salida registrada correctamente."
+
         conn.close()
 
-        mensaje = "✅ Salida registrada correctamente."
-        return RedirectResponse(url=f"/salida?filtro_formato={nombre_consumible}&mensaje={mensaje}", status_code=303)
+        # Codificar el mensaje para la URL
+        from urllib.parse import quote
+        mensaje_encoded = quote(mensaje)
+
+        return RedirectResponse(url=f"/salida?filtro_formato={nombre_consumible}&mensaje={mensaje_encoded}", status_code=303)
 
     except Exception as e:
-        print(f"❌ Error al registrar salida: {e}")
-        raise HTTPException(status_code=500, detail="Error interno al registrar la salida.")
+        print(f"❌ Error en registrar_salida(): {e}")
+        raise HTTPException(status_code=500, detail="Error al registrar la salida.")
+
 
 
 @app.get("/stock", response_class=HTMLResponse)
