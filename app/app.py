@@ -175,6 +175,7 @@ def registrar_salida(
     id_lote: str = Form(...),
     documento: str = Form(...),
     cantidad: float = Form(...)
+    filtro_formato: str = Form("")
 ):
     try:
         conn = get_connection()
