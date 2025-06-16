@@ -50,9 +50,13 @@
                     <label class="form-label">Lote disponible</label>
                     <select name="id_lote" class="form-select" required {% if not lotes %}disabled{% endif %}>
                         <option value="">-- Selecciona un lote --</option>
-                        {% for lote, stock in lotes %}
-                            <option value="{{ lote }}">{{ lote }} ({{ "%.2f"|format(stock) }} uds disponibles)</option>
-                        {% endfor %}
+                        {% if lotes %}
+            {% for lote, stock in lotes %}
+                <option value="{{ lote }}">{{ lote }} ({{ "%.2f"|format(stock) }} uds disponibles)</option>
+            {% endfor %}
+        {% else %}
+            <option disabled>No hay lotes disponibles</option>
+        {% endif %}
                     </select>
                 </div>
 
