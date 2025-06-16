@@ -129,10 +129,9 @@ def salida_form(request: Request, filtro_formato: str = "", mensaje: str = ""):
         conn = get_connection()
         cursor = conn.cursor()
 
-        # Obtener todos los formatos
+        # Obtener todos los formatos disponibles
         cursor.execute("SELECT codigo_hoja, nombre_mostrado FROM consumibles ORDER BY nombre_mostrado")
         formatos_disponibles = cursor.fetchall()
-
         formatos_codigos = [f[0] for f in formatos_disponibles]
 
         if filtro_formato and filtro_formato not in formatos_codigos:
@@ -143,7 +142,7 @@ def salida_form(request: Request, filtro_formato: str = "", mensaje: str = ""):
             lotes = []
             if filtro_formato:
                 cursor.execute("""
-                    SELECT id_lote, 
+                    SELECT id_lote,
                            SUM(COALESCE(entrada, 0)) - SUM(COALESCE(salida, 0)) AS stock
                     FROM movimientos
                     WHERE nombre_consumible = %s
@@ -166,6 +165,35 @@ def salida_form(request: Request, filtro_formato: str = "", mensaje: str = ""):
     except Exception as e:
         print(f"❌ Error en salida_form(): {e}")
         raise HTTPException(status_code=500, detail="Error interno en la carga de la página de salida.")
+
+
+@app.post("/salida")
+def registrar_salida(
+    request: Request,
+    fecha: str = Form(...),
+    nombre_consumible: str = Form(...),
+    id_lote: str = Form(...),
+    documento: str = Form(...),
+    cantidad: float = Form(...)
+):
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            INSERT INTO movimientos (fecha, tipo, id_lote, documento, nombre_consumible, entrada, salida, existencias, precio_unitario)
+            VALUES (%s, 'salida', %s, %s, %s, NULL, %s, NULL, NULL)
+        """, (fecha, id_lote, documento, nombre_consumible, cantidad))
+
+        conn.commit()
+        conn.close()
+
+        mensaje = "✅ Salida registrada correctamente."
+        return RedirectResponse(url=f"/salida?filtro_formato={nombre_consumible}&mensaje={mensaje}", status_code=303)
+
+    except Exception as e:
+        print(f"❌ Error al registrar salida: {e}")
+        raise HTTPException(status_code=500, detail="Error interno al registrar la salida.")
 
 
 @app.get("/stock", response_class=HTMLResponse)
