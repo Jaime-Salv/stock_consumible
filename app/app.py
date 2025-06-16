@@ -140,15 +140,15 @@ def salida_form(request: Request, filtro_formato: str = "", mensaje: str = ""):
             filtro_formato = ""
             lotes = []
         else:
-            # Cargar los lotes del formato seleccionado
             lotes = []
             if filtro_formato:
                 cursor.execute("""
-                    SELECT id_lote, SUM(COALESCE(entrada, 0)) - SUM(COALESCE(salida, 0)) AS stock
+                    SELECT id_lote, 
+                           SUM(COALESCE(entrada, 0)) - SUM(COALESCE(salida, 0)) AS stock
                     FROM movimientos
                     WHERE nombre_consumible = %s
                     GROUP BY id_lote
-                    HAVING stock > 0
+                    HAVING SUM(COALESCE(entrada, 0)) - SUM(COALESCE(salida, 0)) > 0
                 """, (filtro_formato,))
                 lotes = cursor.fetchall()
 
@@ -164,9 +164,9 @@ def salida_form(request: Request, filtro_formato: str = "", mensaje: str = ""):
         })
 
     except Exception as e:
-        # Log en consola del servidor
         print(f"❌ Error en salida_form(): {e}")
         raise HTTPException(status_code=500, detail="Error interno en la carga de la página de salida.")
+
 
 @app.get("/stock", response_class=HTMLResponse)
 def ver_stock(request: Request, filtro_formato: str = "", filtro_lote: str = ""):
