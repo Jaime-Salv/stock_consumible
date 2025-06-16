@@ -28,7 +28,9 @@
                 </script>
             {% endif %}
 
-            <form method="post">
+            <form method="post" action="/salida">
+                <input type="hidden" name="filtro_formato" value="{{ filtro_formato }}">
+                
                 <div class="mb-3">
                     <label class="form-label">Fecha</label>
                     <input type="date" name="fecha" class="form-control" required>
@@ -93,4 +95,5 @@
     </script>
 </body>
 </html>
+
 
