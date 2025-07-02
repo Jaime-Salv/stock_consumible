@@ -30,6 +30,8 @@ def crear_tablas():
     )
     """)
 
+    cursor.execute("ALTER TABLE consumibles ADD COLUMN IF NOT EXISTS activo BOOLEAN DEFAULT TRUE")
+
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS movimientos (
         id SERIAL PRIMARY KEY,
@@ -56,7 +58,7 @@ def menu(request: Request):
 def gestionar_consumibles(request: Request):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT codigo_hoja, nombre_mostrado, categoria FROM consumibles ORDER BY categoria, nombre_mostrado")
+    cursor.execute("SELECT codigo_hoja, nombre_mostrado, categoria FROM consumibles WHERE activo = TRUE ORDER BY categoria, nombre_mostrado")
     consumibles = cursor.fetchall()
     conn.close()
     return templates.TemplateResponse("consumibles.html", {"request": request, "consumibles": consumibles})
@@ -77,10 +79,10 @@ def agregar_consumible(nombre_mostrado: str = Form(...), codigo_hoja: str = Form
     return RedirectResponse(url="/consumibles", status_code=303)
 
 @app.post("/consumibles/eliminar")
-def eliminar_consumible(codigo_hoja: str = Form(...)):
+def archivar_consumible(codigo_hoja: str = Form(...)):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM consumibles WHERE codigo_hoja = %s", (codigo_hoja,))
+    cursor.execute("UPDATE consumibles SET activo = FALSE WHERE codigo_hoja = %s", (codigo_hoja,))
     conn.commit()
     conn.close()
     return RedirectResponse(url="/consumibles", status_code=303)
