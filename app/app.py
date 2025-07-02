@@ -91,7 +91,7 @@ def archivar_consumible(codigo_hoja: str = Form(...)):
 def entrada_form(request: Request):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT categoria, nombre_mostrado, codigo_hoja FROM consumibles")
+    cursor.execute("SELECT categoria, nombre_mostrado, codigo_hoja FROM consumibles WHERE activo = TRUE")
     datos = cursor.fetchall()
     conn.close()
 
@@ -132,7 +132,7 @@ def salida_form(request: Request, filtro_formato: str = "", mensaje: str = ""):
         cursor = conn.cursor()
 
         # Obtener todos los formatos disponibles
-        cursor.execute("SELECT codigo_hoja, nombre_mostrado FROM consumibles ORDER BY nombre_mostrado")
+        cursor.execute("SELECT categoria, nombre_mostrado, codigo_hoja FROM consumibles WHERE activo = TRUE")
         formatos_disponibles = cursor.fetchall()
         formatos_codigos = [f[0] for f in formatos_disponibles]
 
