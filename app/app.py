@@ -130,7 +130,7 @@ def salida_form(request: Request, filtro_formato: str = "", mensaje: str = ""):
         conn = get_connection()
         cursor = conn.cursor()
 
-        # Obtener solo las columnas necesarias: código y nombre
+        # ✅ CONSULTA CORREGIDA: solo 2 columnas (código y nombre)
         cursor.execute("SELECT codigo_hoja, nombre_mostrado FROM consumibles WHERE activo = TRUE")
         formatos_disponibles = cursor.fetchall()
         formatos_codigos = [f[0] for f in formatos_disponibles]  # f[0] = codigo_hoja
@@ -166,6 +166,7 @@ def salida_form(request: Request, filtro_formato: str = "", mensaje: str = ""):
     except Exception as e:
         print(f"❌ Error en salida_form(): {e}")
         raise HTTPException(status_code=500, detail="Error interno en la carga de la página de salida.")
+
 
 
 @app.post("/salida", response_class=HTMLResponse)
