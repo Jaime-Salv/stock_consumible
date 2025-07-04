@@ -124,17 +124,16 @@ def registrar_entrada(
     conn.commit()
     conn.close()
     return entrada_form(request=request)
-
 @app.get("/salida", response_class=HTMLResponse)
 def salida_form(request: Request, filtro_formato: str = "", mensaje: str = ""):
     try:
         conn = get_connection()
         cursor = conn.cursor()
 
-        # Obtener todos los formatos disponibles
-        cursor.execute("SELECT categoria, nombre_mostrado, codigo_hoja FROM consumibles WHERE activo = TRUE")
+        # Obtener solo las columnas necesarias: código y nombre
+        cursor.execute("SELECT codigo_hoja, nombre_mostrado FROM consumibles WHERE activo = TRUE")
         formatos_disponibles = cursor.fetchall()
-        formatos_codigos = [f[0] for f in formatos_disponibles]
+        formatos_codigos = [f[0] for f in formatos_disponibles]  # f[0] = codigo_hoja
 
         if filtro_formato and filtro_formato not in formatos_codigos:
             mensaje = "⚠️ El formato seleccionado no existe o aún no tiene movimientos."
@@ -211,7 +210,6 @@ def registrar_salida(
     except Exception as e:
         print(f"❌ Error en registrar_salida(): {e}")
         raise HTTPException(status_code=500, detail="Error al registrar la salida.")
-
 
 
 @app.get("/stock", response_class=HTMLResponse)
